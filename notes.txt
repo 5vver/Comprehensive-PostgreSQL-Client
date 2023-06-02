@@ -1,0 +1,606 @@
+5, 6
+9стр - create view
+14стр - having
+15стр - edited tooo
+ 
+// tabless creaction
+
+create table employee
+(
+    e_id    serial not null,
+    name    text   not null,
+    surname text   not null,
+    
+    PRIMARY KEY (e_id)
+);
+
+create table information
+(
+    info_id       serial      not null,
+    department_id integer      not null,
+    email         text,
+    cellnumber    varchar(12) not null,
+    e_id          integer,
+    stime_id      integer,
+    truancies     integer default 0,
+    
+    PRIMARY KEY (info_id),
+    FOREIGN KEY (department_id)
+        REFERENCES department (department_id)
+        ON DELETE CASCADE,
+    FOREIGN KEY (e_id)
+        REFERENCES employee (e_id)
+        ON DELETE CASCADE,
+    FOREIGN KEY (stime_id )
+        REFERENCES shift_time (stime_id)
+        ON DELETE CASCADE
+);
+
+create table department
+(
+    department_id   serial not null,
+    departmentname  text,
+    supervisorname  text,
+    postname        text,
+    total_truancies integer default 0,
+    
+    PRIMARY KEY (department_id)
+);
+
+create table shift_time
+(
+    stime_id  serial  not null,
+    wterm_id  integer  not null,
+    shifttime integer not null,
+    
+    PRIMARY KEY (stime_id),
+    FOREIGN KEY (wterm_id)
+        REFERENCES working_term (wterm_id)
+        ON DELETE CASCADE
+);
+
+create table working_term
+(
+    wterm_id    serial    not null,
+    arrivaltime timestamp not null,
+    leavingtime timestamp not null,
+    appeared    boolean default true,
+    
+    PRIMARY KEY (wterm_id)
+);
+
+
+
+// roles creation
+
+REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA company FROM companyuser;
+REVOKE ALL ON SCHEMA company FROM companyuser
+
+CREATE ROLE companyuser LOGIN PASSWORD '123';
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA company TO companyuser;
+
+GRANT USAGE ON SCHEMA company TO companyuser
+
+DROP USER companyuser
+
+CREATE ROLE companyadmin SUPERUSER LOGIN PASSWORD '12345';
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA company TO companyadmin;
+
+--------------------------------------------------------------------------------------------------------------------------
+
+// data insert
+
+INSERT INTO company.employee(name, surname) VALUES('Александр','Шляпик');
+INSERT INTO company.department(departmentname, supervisorname, postname) VALUES ('4scheme', 'Майк Вазовски', 'Начальник');
+INSERT INTO company.working_term(arrivaltime, leavingtime) VALUES ('2012-04-04 8:00:00', '2012-01-04 15:00:00');
+INSERT INTO company.shift_time(stime_id, shifttime, wterm_id) VALUES (4, 8, 4);
+INSERT INTO company.information(department_id, email, cellnumber) VALUES (3, 'xxandr2322@gmail.com', '+79046554521');
+
+
+
+// 2a. Посмотреть всех сотрудников со сменой длительностью от 8 часов
+
+SELECT surname,
+CASE
+WHEN shifttime < 8
+THEN 'Смена < 8 часов'
+ELSE CAST(shifttime AS CHAR(20))
+END shifttime
+FROM company.employee
+LEFT JOIN company.information
+ON company.employee.e_id=company.information.e_id
+LEFT JOIN company.shift_time ON company.information.stime_id=company.shift_time.stime_id
+
+
+// 2b. Таблица для отделов
+
+CREATE VIEW e_info AS SELECT e.name, e.surname, i.cellnumber, i.email
+FROM company.employee AS e
+LEFT JOIN company.information AS i
+ON e.e_id=i.e_id
+
+CREATE OR REPLACE FUNCTION update_emp()
+    RETURNS trigger AS
+$$
+BEGIN
+    IF new.name <> old.name THEN
+        UPDATE company.employee SET name = new.name
+        WHERE name = old.name AND surname = old.surname;
+    end if;
+    IF new.surname <> old.surname THEN
+        UPDATE company.employee SET surname = new.surname
+        WHERE name = old.name AND surname = old.surname;
+    end if;
+    IF new.cellnumber <> old.cellnumber THEN
+        UPDATE company.information SET cellnumber = new.cellnumber
+        WHERE cellnumber = old.cellnumber AND email = old.email;
+    end if;
+    IF new.email <> old.email THEN
+        UPDATE company.information SET email = new.email
+        WHERE cellnumber = old.cellnumber AND email = old.email;
+    end if;
+    RETURN new;
+END;
+$$ LANGUAGE 'plpgsql';
+
+CREATE TRIGGER update_employee
+    INSTEAD OF UPDATE
+    ON company.e_info
+    FOR EACH ROW
+EXECUTE PROCEDURE update_emp()
+
+
+-------------------------------------------------------//
+
+CREATE VIEW view1 AS SELECT e.name, e.surname, i.cellnumber, i.email, d.departmentname, d.postname, w.arrivaltime, w.leavingtime, s.shifttime
+FROM company.employee AS e
+LEFT JOIN company.information AS i
+ON e.e_id=i.e_id
+LEFT JOIN company.department AS d
+ON i.department_id=d.department_id
+LEFT JOIN company.shift_time AS s
+ON i.stime_id=s.stime_id
+LEFT JOIN company.working_term AS w
+ON s.wterm_id=w.wterm_id
+
+CREATE OR REPLACE FUNCTION view_insert()
+    RETURNS trigger AS
+$$
+BEGIN
+    PERFORM insert_data(new.name, new.surname, (SELECT department_id FROM company.department
+    WHERE departmentname=new.departmentname AND postname=new.postname), new.email, new.cellnumber, new.arrivaltime, new.leavingtime, new.shifttime);
+    return new;
+END;
+$$ LANGUAGE 'plpgsql';
+
+CREATE TRIGGER viewtrigger
+    INSTEAD OF INSERT
+    ON company.view1
+    FOR EACH ROW
+EXECUTE PROCEDURE view_insert()
+
+INSERT INTO view1 VALUES ('Иван', 'Башкеров', '+79106485515', 'howdfucc@mail.ru', 'hqc', 'Куратор', '2013-05-21 18:00:00', '2013-05-22 00:00:00', 6)
+
+// 2c. Вывести сотрудника с длительностью смены больше обычной
+
+SELECT e.name,
+       e.surname,
+       (SELECT cellnumber FROM company.information WHERE e_id=e.e_id) AS cell,
+       (SELECT s.shifttime FROM (SELECT shifttime, stime_id FROM company.shift_time WHERE stime_id=(SELECT stime_id FROM company.information WHERE e_id=e.e_id)) AS s)
+FROM (SELECT name, surname, e_id FROM company.employee) AS e
+WHERE (SELECT s.shifttime FROM (SELECT shifttime, stime_id FROM company.shift_time WHERE stime_id=(SELECT stime_id FROM company.information WHERE e_id=e.e_id)) AS s) > (SELECT AVG(shifttime) FROM company.shift_time)
+
+// 2c. Вывести фамилии сотрудников с прогулами
+
+(WHERE) Вывод информации сотрудников у которых есть прогулы
+
+SELECT i.email, i.cellnumber, i.truancies
+FROM company.information AS i
+WHERE (SELECT i.truancies) > 0
+ORDER BY i.email
+
+(SELECT) Вывод информации сотрудников без прогулов
+
+SELECT email, cellnumber, (SELECT i.truancies<1)
+FROM company.information AS i
+
+(FROM) Вывод количества прогулов в каждом отделе
+
+SELECT d.departmentname, SUM(t.truancies)
+FROM company.department AS d, (SELECT truancies, department_id FROM company.information) AS t
+WHERE d.department_id=t.department_id
+GROUP BY d.departmentname
+
+// 2d. Вывести сотрудников с количеством прогулов больше обычного и число прогулов в их отделе
+
+SELECT name, surname, cellnumber, truancies
+FROM company.employee, company.information, company.shift_time, company.department
+WHERE employee.e_id=information.e_id AND information.stime_id=shift_time.stime_id
+AND information.department_id=company.department.department_id
+GROUP BY surname, name, cellnumber, truancies, total_truancies
+HAVING (SELECT AVG(truancies) FROM company.information) > (SUM(total_truancies))
+
+// 2e. Вывести сотрудников определённого отдела, которые не явились
+
+SELECT e.name, e.surname, d.departmentname
+FROM company.employee AS e
+LEFT JOIN company.information AS i
+ON e.e_id=i.e_id
+LEFT JOIN company.department AS d
+ON i.department_id=d.department_id
+LEFT JOIN company.shift_time AS s
+ON i.stime_id=s.stime_id
+LEFT JOIN company.working_term AS w
+ON s.wterm_id=w.wterm_id
+WHERE (SELECT ALL(d.departmentname='название отдела' AND w.appeared = false))
+
+
+// 3. Индексы для увеличения скорости запросов
+
+CREATE INDEX idx_name ON company.employee (name)
+CREATE INDEX idx_surname ON company.employee (surname)
+CREATE INDEX idx_cell ON company.information (cellnumber)
+CREATE INDEX idx_stime ON company.shift_time (shifttime)
+
+// 4. Триггер на таблицу information если пользователь не появился в свою смену(wterm) то количество погулов +1
+
+// При добавлении
+
+CREATE OR REPLACE FUNCTION info_check()
+    RETURNS trigger AS
+$$
+BEGIN
+    if(SELECT (SELECT appeared FROM company.working_term WHERE wterm_id=(SELECT wterm_id FROM company.shift_time WHERE stime_id=new.stime_id))) = false
+        then
+        new.truancies = new.truancies + 1;
+    end if;
+    return new;
+END;
+$$ LANGUAGE 'plpgsql';
+
+CREATE TRIGGER acheck
+    BEFORE INSERT
+    ON company.information
+    FOR EACH ROW
+EXECUTE PROCEDURE info_check()
+
+//---------------------------------------------------------------------------------------------------------
+
+// При обновлении. Если в отделе есть прогулы, то обновляемая запись автоматически имеет поле прогулов = значению всех прогулов в 
+// отделе
+
+CREATE OR REPLACE FUNCTION d_update()
+    RETURNS trigger AS
+$$
+BEGIN
+    if(SELECT SUM(t.truancies) FROM company.department AS d, (SELECT truancies, department_id FROM company.information) AS t
+                    WHERE d.department_id=t.department_id AND d.departmentname=new.departmentname) > 0
+        then
+        new.total_truancies = (SELECT SUM(t.truancies) FROM company.department AS d, (SELECT truancies, department_id FROM company.information) AS t
+                    WHERE d.department_id=t.department_id AND d.departmentname=new.departmentname);
+    end if;
+    return new;
+END;
+$$ LANGUAGE 'plpgsql';
+
+CREATE TRIGGER tcheck
+    BEFORE UPDATE
+    ON company.department
+    FOR EACH ROW
+EXECUTE PROCEDURE d_update()
+
+UPDATE company.department SET departmentname='4scheme', supervisorname='Майк Вазовски', postname='Начальник', total_truancies=0 WHERE department_id=4
+
+SELECT update_department(4, '4scheme', 'Майк Вазовски', 'Начальник')
+
+// При удалении
+
+CREATE OR REPLACE FUNCTION info_delete()
+    RETURNS trigger AS
+$$
+BEGIN
+    if (SELECT old.truancies) > 0 THEN
+        UPDATE company.department SET total_truancies = total_truancies - (SELECT old.truancies)
+        WHERE department_id=old.department_id;
+    end if;
+    return new;
+END;
+$$ LANGUAGE 'plpgsql';
+
+CREATE TRIGGER info_del
+    AFTER DELETE
+    ON company.information
+    FOR EACH ROW
+EXECUTE PROCEDURE info_delete()
+
+
+
+//---------------------------------------------------------------------------------------------------------
+
+
+// 5. Хранимые процедуры операций
+
+Добавление: 
+
+CREATE OR REPLACE FUNCTION insert_data(n text, s text, d_id int, em text, cell text, atm timestamp, ltm timestamp, st int) RETURNS VOID AS
+$$
+BEGIN
+    INSERT INTO company.employee(e_id, name, surname)  VALUES ((SELECT (SELECT MAX(e_id) FROM company.employee) + 1), n, s);
+    INSERT INTO company.working_term(wterm_id, arrivaltime, leavingtime) VALUES 
+    ((SELECT (SELECT MAX(wterm_id) FROM company.working_term) + 1), atm, ltm);
+    INSERT INTO company.shift_time(stime_id, shifttime, wterm_id) VALUES 
+    ((SELECT (SELECT MAX(wterm_id) FROM company.shift_time) + 1), st, (SELECT MAX(wterm_id) FROM company.working_term));
+    INSERT INTO company.information(info_id, department_id, email, cellnumber, e_id, stime_id) VALUES 
+    ((SELECT (SELECT MAX(info_id) FROM company.information) + 1), d_id, em, cell, (SELECT MAX(e_id) FROM company.employee), (SELECT MAX(shift_time.stime_id) FROM company.shift_time));
+END
+$$
+  LANGUAGE 'plpgsql';
+  
+SELECT insert_data('Антон','Печенов', 3,'shrekmegakek35@gmail.com', '+79023441312', '2012-07-18 18:00:00', '2012-06-21 2:00:00', 8)
+
+//---------------------------------------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION insert_department(departmentn text, sname text, pname text) RETURNS VOID AS
+$$
+BEGIN
+    INSERT INTO company.department(department_id, departmentname, supervisorname, postname)
+    VALUES ((SELECT (SELECT MAX(department_id) FROM company.department) + 1), departmentn, sname, pname);
+END
+$$
+  LANGUAGE 'plpgsql';
+
+SELECT insert_department('BHQ', 'Игорь Комаров', 'Глава отдела')
+
+//---------------------------------------------------------------------------------------------------------
+
+Удаление по cell and email:
+
+create function delete_data_cell_email(cell text, e text) returns void
+    language plpgsql
+as
+$$
+DECLARE
+    info_id1 int;
+    stime_id1 int;
+    wterm_id1 int;
+    e_id1 int;
+BEGIN
+    info_id1 = (SELECT info_id FROM company.information WHERE cellnumber=cell AND email=e);
+    stime_id1 = (SELECT stime_id FROM company.information WHERE cellnumber=cell AND email=e);
+    wterm_id1 = (SELECT wterm_id FROM company.shift_time
+    WHERE stime_id=((SELECT stime_id FROM company.information WHERE cellnumber=cell AND email=e)));
+    e_id1 = (SELECT e_id FROM company.information WHERE cellnumber=cell AND email=e);
+
+    DELETE FROM company.information WHERE info_id=info_id1;
+    DELETE FROM company.employee WHERE e_id=e_id1;
+    DELETE FROM company.shift_time WHERE stime_id=stime_id1;
+    DELETE FROM company.working_term WHERE wterm_id = wterm_id1;
+
+END
+$$;
+
+//---------------------------------------------------------------------------------------------------------
+
+Удаление по id:
+
+CREATE OR REPLACE FUNCTION delete_data_wid(i_id int, eid int, st_id int, wt_id int) RETURNS VOID AS
+$$
+BEGIN
+    DELETE FROM company.information WHERE info_id=i_id;
+    DELETE FROM company.employee WHERE e_id=eid;
+    DELETE FROM company.shift_time WHERE stime_id=st_id;
+    DELETE FROM company.working_term WHERE wterm_id = wt_id;
+END
+$$
+  LANGUAGE 'plpgsql';
+
+SELECT delete_data_wid(9, 9, 9, 9)
+
+//---------------------------------------------------------------------------------------------------------
+
+Удаление по departmentname и postname:
+
+CREATE OR REPLACE FUNCTION delete_department_name_post(dname text, pname text) RETURNS VOID AS
+$$
+BEGIN
+    DELETE FROM company.department WHERE department_id=(SELECT department_id
+    FROM company.department WHERE departmentname=dname AND postname=pname);
+END
+$$
+  LANGUAGE 'plpgsql';
+
+SELECT delete_department_name_post('BHQ', 'Глава отдела')
+
+//---------------------------------------------------------------------------------------------------------
+
+Удаление по department_id
+
+CREATE OR REPLACE FUNCTION delete_department_wid(d_id int) RETURNS VOID AS
+$$
+BEGIN
+    DELETE FROM company.department WHERE department_id=d_id;
+END
+$$
+  LANGUAGE 'plpgsql';
+
+SELECT delete_department_wid(8)
+
+//---------------------------------------------------------------------------------------------------------
+
+Изменение данных: 
+
+CREATE OR REPLACE FUNCTION update_employee(eid int, n text, s text) RETURNS VOID AS
+$$
+BEGIN
+    UPDATE company.employee SET name=n, surname=s WHERE e_id=eid;
+END
+$$
+  LANGUAGE 'plpgsql';
+
+SELECT update_employee(9, 'Антон', 'Печенов')
+
+//---------------------------------------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION update_information(i_id int, em text, cell text, tr int) RETURNS VOID AS
+$$
+BEGIN
+    UPDATE company.information SET email=em, cellnumber=cell, truancies=tr WHERE info_id=i_id;
+END
+$$
+  LANGUAGE 'plpgsql';
+
+SELECT update_information(9,'shrekmegakek35@gmail.com','+79023441312', 0)
+
+//---------------------------------------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION update_department(d_id int, dname text, sname text, pname text) RETURNS VOID AS
+$$
+BEGIN
+    UPDATE company.department SET departmentname=dname, supervisorname=sname, postname=pname WHERE department_id=d_id;
+END
+$$
+  LANGUAGE 'plpgsql';
+
+SELECT update_department(7, 'hqc', 'Станислав Триноженко', 'Куратор')
+
+//---------------------------------------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION update_wterm(wt_id int, atm timestamp, ltm timestamp, apprd bool) RETURNS VOID AS
+$$
+BEGIN
+    UPDATE company.working_term SET arrivaltime=atm, leavingtime=ltm, appeared=apprd WHERE wterm_id=wt_id;
+END
+$$
+  LANGUAGE 'plpgsql';
+
+SELECT update_wterm(9, '2012-07-18 18:00:00', '2012-06-21 2:00:00', false);
+
+//---------------------------------------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION update_stime(st_id int, st int) RETURNS VOID AS
+$$
+BEGIN
+    UPDATE company.shift_time SET shifttime=st WHERE stime_id=st_id;
+END
+$$
+  LANGUAGE 'plpgsql';
+
+SELECT update_stime(9, 8);
+
+// 6. Транзакция в функции
+
+// Функция, которая добавляет +1 прогул при не явке сотрудника. 
+// Первое условие проверяет наличие работника в списке. Второе условие проверяет наличие у работника галочки прогула.
+
+CREATE OR REPLACE FUNCTION truancy_check(eid int) RETURNS VOID AS
+$$
+BEGIN
+    UPDATE company.information SET truancies=truancies + 1 WHERE e_id=eid;
+    IF (eid != ALL(SELECT employee.e_id FROM company.employee)) THEN
+        RAISE EXCEPTION using
+            errcode='mismatch',
+            message='your id isnt correct',
+            hint='id is incorrect';
+        ROLLBACK;
+    end if;
+    IF (SELECT appeared FROM company.working_term
+    WHERE wterm_id=(SELECT wterm_id FROM company.shift_time
+    WHERE stime_id=(SELECT stime_id FROM company.information WHERE e_id=eid))) = true THEN
+        RAISE EXCEPTION using
+            errcode='mismatch',
+            message='The employee appeared',
+            hint='The employee appeared';
+        ROLLBACK;
+    end if;
+EXCEPTION WHEN others THEN
+        RAISE NOTICE 'SQLSTATE: %', SQLSTATE;
+        RAISE;
+END
+$$
+  LANGUAGE 'plpgsql';
+
+SELECT truancy_check(9)
+
+// 7. Вывод количества прогулов и обновление их же количества в определённом отделе при помощи курсора
+
+CREATE OR REPLACE FUNCTION t_update(dname text) RETURNS INT AS
+$$
+DECLARE
+    crs_my CURSOR FOR SELECT DISTINCT d.departmentname, t.truancies FROM company.department AS d, (SELECT truancies, department_id FROM company.information) AS t
+                    WHERE d.department_id=t.department_id AND d.departmentname=dname;
+    _i_id int;
+    _dname text;
+    tr int;
+    sum int;
+BEGIN
+    OPEN crs_my;
+    LOOP
+        FETCH crs_my INTO _dname, tr;
+        IF NOT FOUND THEN EXIT;
+        end if;
+        sum=tr;
+        UPDATE company.department SET total_truancies=sum WHERE departmentname=_dname;
+    end loop;
+    CLOSE crs_my;
+    RETURN sum;
+END
+$$
+  LANGUAGE 'plpgsql';
+
+SELECT t_update('BTMC')
+
+// 8. Скалярная функция считает количество прогулов всего во всех отделах. Используя эту скалярную функцию выведем сотрудников с 
+// числом прогулов меньше обычного
+
+CREATE OR REPLACE FUNCTION t_amount() RETURNS REAL AS
+$$
+DECLARE
+    avgs REAL;
+BEGIN
+    avgs = (SELECT AVG(truancies) FROM company.information);
+    RETURN avgs;
+END
+$$
+  LANGUAGE 'plpgsql';
+
+SELECT name, surname, departmentname, truancies
+FROM company.employee, company.information, company.shift_time, company.department
+WHERE employee.e_id=information.e_id AND information.stime_id=shift_time.stime_id AND department.department_id=information.department_id AND truancies<(SELECT t_amount())
+GROUP BY surname, name, departmentname, truancies
+
+//---------------------------------------------------------------------------------------------------------
+
+// Векторная функция возвращает телефон сотрудника, 
+// Хранимая процедура(функция) обновляет номер телефона сотрудника
+
+CREATE OR REPLACE FUNCTION GetENumb(eid int) RETURNS TABLE(name text, surname text, cell varchar, t int) AS
+$$
+BEGIN
+    RETURN query SELECT employee.name, employee.surname, cellnumber, truancies
+        FROM company.employee, company.information, company.shift_time
+        WHERE employee.e_id=eid AND information.e_id=eid AND information.stime_id=shift_time.stime_id;
+END
+$$
+  LANGUAGE 'plpgsql';
+
+CREATE OR REPLACE FUNCTION UpdTNumber(eid int, cnum text)
+    RETURNS void AS
+$$
+BEGIN
+    UPDATE company.information SET cellnumber = cnum WHERE cellnumber = (SELECT cell FROM GetENumb(eid));
+END;
+$$ LANGUAGE 'plpgsql';
+
+SELECT UpdTNumber(8, '+79103212443')
+
+
+
+
+
+
+
+
+
+
+
+
